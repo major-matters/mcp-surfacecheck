@@ -1,0 +1,13 @@
+# Example workflow. Copy to .github/workflows/mcp-surfacecheck.yml in your MCP server repo.
+name: MCP Surface Check
+on: [push, pull_request]
+
+jobs:
+  sentinel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: major-matters/mcp-surfacecheck@v1
+        with:
+          # path: .          # scan a subdirectory if your server lives in one
+          fail-on: none      # set to "high" to block PRs that introduce a high-surface pattern

@@ -1,0 +1,61 @@
+name: "MCP Surface Check"
+description: "Static, read-only security surface check for MCP servers. Never connects to or probes anything. Writes a job summary and earns a README badge."
+author: "Major Labs"
+branding:
+  icon: "shield"
+  color: "orange"
+
+inputs:
+  path:
+    description: "Directory to scan, relative to the repo root."
+    required: false
+    default: "."
+  fail-on:
+    description: "Fail the job if the surface tier is at or above this: none, elevated, or high."
+    required: false
+    default: "none"
+
+outputs:
+  tier:
+    description: "Surface tier: Low, Elevated, or High."
+    value: ${{ steps.scan.outputs.tier }}
+  score:
+    description: "Surface score, 0-100."
+    value: ${{ steps.scan.outputs.score }}
+  finding-count:
+    description: "Number of static findings."
+    value: ${{ steps.scan.outputs.finding_count }}
+  badge:
+    description: "Paste-ready README badge markdown."
+    value: ${{ steps.scan.outputs.badge }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: scan
+      shell: bash
+      env:
+        SENTINEL_PATH: ${{ inputs.path }}
+        SENTINEL_FAIL_ON: ${{ inputs.fail-on }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        # Job summary (markdown) — visible on the run's page.
+        python3 "$ACTION_PATH/sentinel.py" --github-summary "$SENTINEL_PATH" >> "$GITHUB_STEP_SUMMARY"
+        # Machine-readable result, used for outputs and the gate.
+        python3 "$ACTION_PATH/sentinel.py" --json "$SENTINEL_PATH" > "$RUNNER_TEMP/sentinel.json"
+        python3 - "$SENTINEL_FAIL_ON" <<'PY'
+        import json, os, sys
+        d = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "sentinel.json")))
+        tier = d["tier"]
+        color = {"Low": "4FA86A", "Elevated": "F79E1B", "High": "E0563B"}.get(tier, "9A9AA5")
+        badge = f"[![MCP Surface Check: {tier.lower()} surface](https://img.shields.io/badge/MCP_Surface_Check-{tier.lower()}-{color})](https://majorlabs.co/security)"
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"tier={tier}\n")
+            f.write(f"score={d['score']}\n")
+            f.write(f"finding_count={d['finding_count']}\n")
+            f.write(f"badge={badge}\n")
+        rank = {"Low": 0, "Elevated": 1, "High": 2}
+        threshold = {"none": 99, "elevated": 1, "high": 2}[sys.argv[1]]
+        sys.exit(1 if rank[tier] >= threshold else 0)
+        PY
