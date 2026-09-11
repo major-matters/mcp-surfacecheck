@@ -3,11 +3,19 @@ name: MCP Surface Check
 on: [push, pull_request]
 
 jobs:
-  sentinel:
+  surfacecheck:
     runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # only needed for the SARIF upload step
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: major-matters/mcp-surfacecheck@v1
         with:
-          # path: .          # scan a subdirectory if your server lives in one
-          fail-on: none      # set to "high" to block PRs that introduce a high-surface pattern
+          # path: .                     # scan a subdirectory if your server lives in one
+          fail-on: none                 # set to "high" to block PRs that introduce a high-surface pattern
+          sarif-file: surfacecheck.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()                    # upload findings even when fail-on gates the job
+        with:
+          sarif_file: surfacecheck.sarif

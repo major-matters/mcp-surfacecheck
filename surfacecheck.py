@@ -21,10 +21,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 from pathlib import Path
+
+__version__ = "0.2.0"
 
 SOURCE_EXT = (".py", ".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx")
 SKIP_PATH = re.compile(r"(^|/)(node_modules|dist|build|vendor|\.venv|venv|test|tests|__tests__|examples?|docs?|\.git)/", re.I)
@@ -173,12 +176,67 @@ def github_summary(result) -> str:
     return "\n".join(out)
 
 
+# SARIF rule metadata per category. security-severity follows the check weights
+# (30 -> high, 20 -> medium-high, 15 -> medium) so GitHub code scanning sorts
+# findings the same way the surface score weighs them.
+SARIF_SEVERITY = {30: "8.8", 20: "6.5", 15: "5.0"}
+
+
+def sarif_report(result, uri_prefix: str = "") -> dict:
+    weights = {}
+    for category, _langs, weight, _pat, _desc in CHECKS:
+        weights.setdefault(category, weight)
+    rules = []
+    for cat in sorted(weights):
+        label = CATEGORY_LABEL.get(cat, cat)
+        rules.append({
+            "id": cat,
+            "name": "".join(w.capitalize() for w in cat.split("_")),
+            "shortDescription": {"text": f"MCP surface: {label}"},
+            "fullDescription": {"text": f"A source pattern in the {label} category. A finding is a pattern visible in the source, tuned for precision, not a confirmed vulnerability."},
+            "helpUri": SCOREBOARD,
+            "defaultConfiguration": {"level": "error" if weights[cat] >= 30 else "warning"},
+            "properties": {"security-severity": SARIF_SEVERITY.get(weights[cat], "5.0"), "tags": ["security", "mcp"]},
+        })
+    results = []
+    for f in result["findings"]:
+        uri = f"{uri_prefix.rstrip('/')}/{f['path']}" if uri_prefix and uri_prefix != "." else f["path"]
+        fingerprint = hashlib.sha1(f"{f['category']}|{uri}|{f['line']}|{f['desc']}".encode()).hexdigest()
+        results.append({
+            "ruleId": f["category"],
+            "level": "error" if f["weight"] >= 30 else "warning",
+            "message": {"text": f"{CATEGORY_LABEL.get(f['category'], f['category'])}: {f['desc']} — a pattern in the source, not a confirmed vulnerability."},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": uri},
+                    "region": {"startLine": f["line"]},
+                }
+            }],
+            "partialFingerprints": {"mcpSurfaceCheck/v1": fingerprint},
+        })
+    return {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {
+                "name": "MCP Surface Check",
+                "informationUri": SCOREBOARD,
+                "version": __version__,
+                "rules": rules,
+            }},
+            "results": results,
+        }],
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description="MCP Surface Check — local static security check")
     ap.add_argument("path", nargs="?", default=".", help="directory to scan (default: .)")
     ap.add_argument("--json", action="store_true", help="machine-readable result")
     ap.add_argument("--github-summary", action="store_true", help="markdown for the GitHub Actions job summary")
     ap.add_argument("--badge", action="store_true", help="print only the paste-ready badge markdown")
+    ap.add_argument("--sarif", action="store_true", help="SARIF 2.1.0 for GitHub code scanning")
+    ap.add_argument("--sarif-uri-prefix", default="", help="prefix for SARIF file paths when scanning a subdirectory (so annotations land on repo-relative paths)")
     ap.add_argument("--fail-on", choices=["none", "elevated", "high"], default="none", help="exit non-zero if tier is at or above this")
     args = ap.parse_args()
 
@@ -191,6 +249,8 @@ def main():
     # strip raw findings from the JSON-by-default surface unless needed; keep them in --json
     if args.json:
         print(json.dumps(result, indent=2))
+    elif args.sarif:
+        print(json.dumps(sarif_report(result, args.sarif_uri_prefix), indent=2))
     elif args.github_summary:
         print(github_summary(result))
     elif args.badge:

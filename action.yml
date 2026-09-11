@@ -1,5 +1,5 @@
 name: "MCP Surface Check"
-description: "Static, read-only security surface check for MCP servers. Never connects to or probes anything. Writes a job summary and earns a README badge."
+description: "Static, read-only security surface check for MCP servers. Never connects to or probes anything. Job summary, README badge, optional SARIF for code scanning."
 author: "Major Labs"
 branding:
   icon: "shield"
@@ -14,6 +14,10 @@ inputs:
     description: "Fail the job if the surface tier is at or above this: none, elevated, or high."
     required: false
     default: "none"
+  sarif-file:
+    description: "If set, write a SARIF 2.1.0 report to this path (then upload it with github/codeql-action/upload-sarif to see findings in the Security tab)."
+    required: false
+    default: ""
 
 outputs:
   tier:
@@ -28,6 +32,9 @@ outputs:
   badge:
     description: "Paste-ready README badge markdown."
     value: ${{ steps.scan.outputs.badge }}
+  sarif-file:
+    description: "Path of the SARIF report, when sarif-file was set."
+    value: ${{ steps.scan.outputs.sarif_file }}
 
 runs:
   using: "composite"
@@ -35,18 +42,27 @@ runs:
     - id: scan
       shell: bash
       env:
-        SENTINEL_PATH: ${{ inputs.path }}
-        SENTINEL_FAIL_ON: ${{ inputs.fail-on }}
+        SURFACECHECK_PATH: ${{ inputs.path }}
+        SURFACECHECK_FAIL_ON: ${{ inputs.fail-on }}
+        SURFACECHECK_SARIF: ${{ inputs.sarif-file }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
         # Job summary (markdown) — visible on the run's page.
-        python3 "$ACTION_PATH/sentinel.py" --github-summary "$SENTINEL_PATH" >> "$GITHUB_STEP_SUMMARY"
+        python3 "$ACTION_PATH/surfacecheck.py" --github-summary "$SURFACECHECK_PATH" >> "$GITHUB_STEP_SUMMARY"
         # Machine-readable result, used for outputs and the gate.
-        python3 "$ACTION_PATH/sentinel.py" --json "$SENTINEL_PATH" > "$RUNNER_TEMP/sentinel.json"
-        python3 - "$SENTINEL_FAIL_ON" <<'PY'
+        python3 "$ACTION_PATH/surfacecheck.py" --json "$SURFACECHECK_PATH" > "$RUNNER_TEMP/surfacecheck.json"
+        # Optional SARIF for GitHub code scanning. Paths are repo-relative even
+        # when scanning a subdirectory, so annotations land on the right files.
+        if [ -n "$SURFACECHECK_SARIF" ]; then
+          prefix=""
+          if [ "$SURFACECHECK_PATH" != "." ]; then prefix="$SURFACECHECK_PATH"; fi
+          python3 "$ACTION_PATH/surfacecheck.py" --sarif --sarif-uri-prefix "$prefix" "$SURFACECHECK_PATH" > "$SURFACECHECK_SARIF"
+          echo "sarif_file=$SURFACECHECK_SARIF" >> "$GITHUB_OUTPUT"
+        fi
+        python3 - "$SURFACECHECK_FAIL_ON" <<'PY'
         import json, os, sys
-        d = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "sentinel.json")))
+        d = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "surfacecheck.json")))
         tier = d["tier"]
         color = {"Low": "4FA86A", "Elevated": "F79E1B", "High": "E0563B"}.get(tier, "9A9AA5")
         badge = f"[![MCP Surface Check: {tier.lower()} surface](https://img.shields.io/badge/MCP_Surface_Check-{tier.lower()}-{color})](https://majorlabs.co/security)"
