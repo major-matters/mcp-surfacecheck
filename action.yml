@@ -1,5 +1,5 @@
 name: "MCP Surface Check"
-description: "Static, read-only security surface check for MCP servers. Never connects to or probes anything. Job summary, README badge, optional SARIF for code scanning."
+description: "Static, read-only security check for MCP servers. Never connects or probes. Job summary, badge, optional SARIF output."
 author: "Major Labs"
 branding:
   icon: "shield"
