@@ -27,7 +27,7 @@ import re
 import sys
 from pathlib import Path
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 SOURCE_EXT = (".py", ".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx")
 SKIP_PATH = re.compile(r"(^|/)(node_modules|dist|build|vendor|\.venv|venv|test|tests|__tests__|examples?|docs?|\.git)/", re.I)
@@ -90,8 +90,15 @@ def scan_content(path: str, content: str):
             continue
         for m in pat.finditer(content):
             line_no = content.count("\n", 0, m.start()) + 1
-            snippet = lines[line_no - 1].strip()[:160] if line_no - 1 < len(lines) else ""
+            raw = lines[line_no - 1] if line_no - 1 < len(lines) else ""
+            snippet = raw.strip()[:160]
             if snippet.lstrip().startswith(("#", "//", "*")):
+                continue
+            # Honor an inline suppression on the flagged line so maintainers can
+            # mark a verified false positive: `# surfacecheck: ignore` (or the
+            # widely used `# nosec` / `// nosec`). This matches how every serious
+            # static analyzer treats reviewed lines.
+            if re.search(r"(surfacecheck:\s*ignore|nosec|noqa:\s*surfacecheck)", raw):
                 continue
             findings.append({"category": category, "path": path, "line": line_no, "snippet": snippet, "desc": desc, "weight": weight})
     return findings
